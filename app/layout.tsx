@@ -14,7 +14,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="es">
-      <body className="flex min-h-screen bg-gray-100">
+      <body className="flex min-h-screen bg-slate-900 text-white">
         {/* Sidebar */}
         <aside className="w-52 bg-gray-900 text-white flex flex-col p-4 gap-2 shrink-0">
           <h2 className="text-xl font-bold mb-4 text-white">ERP</h2>
