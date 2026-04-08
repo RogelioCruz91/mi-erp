@@ -16,18 +16,13 @@ type Producto = {
   unidad: string;
 };
 
-const CATEGORIAS: Record<string, string> = {
-  "Alimentos preparados": "bg-orange-800 text-orange-200",
-  "Panadería":            "bg-yellow-800 text-yellow-200",
-  "Postres":              "bg-pink-800 text-pink-200",
-  "Frutas":               "bg-green-800 text-green-200",
-  "Carnes":               "bg-red-800 text-red-200",
-  "Mariscos":             "bg-blue-800 text-blue-200",
-  "Bebidas":              "bg-cyan-800 text-cyan-200",
-  "Granos":               "bg-amber-800 text-amber-200",
-  "Lácteos":              "bg-slate-600 text-slate-200",
-  "Condimentos":          "bg-purple-800 text-purple-200",
-  "Vegetales":            "bg-lime-800 text-lime-200",
+const CAT_COLOR: Record<string, string> = {
+  "Lija Agua-Seco": "bg-blue-900/60 text-blue-300",
+  "Lija Fierro":    "bg-orange-900/60 text-orange-300",
+  "Lija Agua":      "bg-cyan-900/60 text-cyan-300",
+  "Lija Microfina": "bg-purple-900/60 text-purple-300",
+  "Lija Madera":    "bg-amber-900/60 text-amber-300",
+  "Lija 3M":        "bg-red-900/60 text-red-300",
 };
 
 export default function Productos() {
@@ -39,7 +34,8 @@ export default function Productos() {
     supabase
       .from("productos")
       .select("*")
-      .order("id", { ascending: true })
+      .order("categoria")
+      .order("nombre")
       .then(({ data }) => {
         if (data) setProductos(data);
         setLoading(false);
@@ -48,7 +44,7 @@ export default function Productos() {
 
   const filtrados = productos.filter((p) =>
     p.nombre.toLowerCase().includes(buscar.toLowerCase()) ||
-    p.categoria?.toLowerCase().includes(buscar.toLowerCase())
+    p.categoria.toLowerCase().includes(buscar.toLowerCase())
   );
 
   return (
@@ -59,8 +55,8 @@ export default function Productos() {
       </div>
 
       <input
-        className="w-full bg-slate-800 border border-slate-600 text-white rounded-md px-4 py-2 text-sm mb-4 focus:outline-none focus:border-green-500"
-        placeholder="Buscar por nombre o categoria..."
+        className="w-full bg-slate-800 border border-slate-600 text-white rounded-md px-4 py-2 text-sm mb-4 focus:outline-none focus:border-orange-500"
+        placeholder="Buscar por nombre, grano o categoria..."
         value={buscar}
         onChange={(e) => setBuscar(e.target.value)}
       />
@@ -69,34 +65,36 @@ export default function Productos() {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-slate-400 text-xs uppercase border-b border-slate-700">
-              <th className="px-4 py-3 text-left">ID</th>
-              <th className="px-4 py-3 text-left">Nombre</th>
+              <th className="px-4 py-3 text-left">Cod.</th>
+              <th className="px-4 py-3 text-left">Descripcion</th>
               <th className="px-4 py-3 text-left">Categoria</th>
+              <th className="px-4 py-3 text-left">Present.</th>
               <th className="px-4 py-3 text-right">Precio</th>
               <th className="px-4 py-3 text-right">Stock</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-700">
             {loading ? (
-              <tr><td colSpan={5} className="px-4 py-6 text-center text-slate-500">Cargando...</td></tr>
+              <tr><td colSpan={6} className="px-4 py-6 text-center text-slate-500">Cargando...</td></tr>
             ) : filtrados.length === 0 ? (
-              <tr><td colSpan={5} className="px-4 py-6 text-center text-slate-500">Sin resultados.</td></tr>
+              <tr><td colSpan={6} className="px-4 py-6 text-center text-slate-500">Sin resultados.</td></tr>
             ) : (
               filtrados.map((p) => (
                 <tr key={p.id} className="hover:bg-slate-700/50 transition-colors">
-                  <td className="px-4 py-3 text-slate-400">{p.id}</td>
-                  <td className="px-4 py-3 text-white font-medium">{p.nombre}</td>
-                  <td className="px-4 py-3">
-                    <span className={`text-xs px-2 py-1 rounded ${CATEGORIAS[p.categoria] ?? "bg-slate-700 text-slate-300"}`}>
+                  <td className="px-4 py-2.5 text-slate-500 font-mono text-xs">{String(p.id).padStart(6, "0")}</td>
+                  <td className="px-4 py-2.5 text-white text-xs">{p.nombre}</td>
+                  <td className="px-4 py-2.5">
+                    <span className={`text-xs px-2 py-0.5 rounded ${CAT_COLOR[p.categoria] ?? "bg-slate-700 text-slate-300"}`}>
                       {p.categoria}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-right text-green-400 font-mono">
+                  <td className="px-4 py-2.5 text-slate-400 text-xs font-mono">{p.unidad}</td>
+                  <td className="px-4 py-2.5 text-right text-orange-400 font-mono text-xs">
                     S/ {parseFloat(String(p.precio)).toFixed(2)}
                   </td>
-                  <td className="px-4 py-3 text-right">
-                    <span className={`font-mono text-sm ${p.stock < 50 ? "text-red-400" : "text-slate-300"}`}>
-                      {p.stock} <span className="text-slate-500 text-xs">{p.unidad}</span>
+                  <td className="px-4 py-2.5 text-right">
+                    <span className={`font-mono text-xs ${p.stock < 50 ? "text-yellow-400" : "text-slate-300"}`}>
+                      {p.stock}
                     </span>
                   </td>
                 </tr>
