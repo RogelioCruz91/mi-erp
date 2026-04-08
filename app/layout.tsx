@@ -43,6 +43,12 @@ export default function RootLayout({
             >
               Ventas
             </Link>
+            <Link
+              href="/tienda"
+              className="px-3 py-2 rounded hover:bg-gray-700 transition-colors text-sm"
+            >
+              Tienda
+            </Link>
           </nav>
         </aside>
 
