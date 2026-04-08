@@ -1,6 +1,9 @@
 "use client";
-import { useEffect, useState, useRef } from "react";
-import { supabase } from "@/lib/supabase";
+import { useEffect, useRef, useState } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+const SUPABASE_URL = "https://gamnenyakraafruvbkin.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdhbW5lbnlha3JhYWZydXZia2luIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk5NzU4NDQsImV4cCI6MjA4NTU1MTg0NH0.UpolMRzWNfd4hqBeYvnTrrvDu1C1rmrNXKvnO82y_OQ";
 
 type Venta = {
   id: number;
@@ -23,7 +26,9 @@ export default function Ventas() {
   const [fecha, setFecha] = useState(ahoraLocal);
   const [msg, setMsg] = useState<{ texto: string; tipo: "ok" | "error" } | null>(null);
   const [guardando, setGuardando] = useState(false);
+  const [estado, setEstado] = useState("conectando...");
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clientRef = useRef(createClient(SUPABASE_URL, SUPABASE_KEY));
 
   function mostrarMsg(texto: string, tipo: "ok" | "error") {
     setMsg({ texto, tipo });
@@ -37,7 +42,7 @@ export default function Ventas() {
       return;
     }
     setGuardando(true);
-    const { error } = await supabase
+    const { error } = await clientRef.current
       .from("ventas")
       .insert({ cliente: cliente.trim(), total: parseFloat(total), fecha });
 
@@ -51,41 +56,57 @@ export default function Ventas() {
     setGuardando(false);
   }
 
-  function agregarFila(data: Venta, tipo: "nueva" | "actualizada" = "nueva") {
-    setVentas((prev) => {
-      const existe = prev.find((v) => v.id === data.id);
-      if (existe) {
-        return prev.map((v) => v.id === data.id ? { ...data, _tipo: "actualizada" } : v);
-      }
-      return [{ ...data, _tipo: tipo }, ...prev];
-    });
-  }
-
   useEffect(() => {
+    const db = clientRef.current;
+
     // Carga inicial
-    supabase
-      .from("ventas")
+    db.from("ventas")
       .select("*")
       .order("id", { ascending: false })
-      .then(({ data }) => {
-        if (data) setVentas(data);
-      });
+      .then(({ data }) => { if (data) setVentas(data); });
 
     // Realtime
-    const channel = supabase
-      .channel("ventas-channel")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "ventas" },
-        (payload) => agregarFila(payload.new as Venta, "nueva"))
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "ventas" },
-        (payload) => agregarFila(payload.new as Venta, "actualizada"))
-      .subscribe();
+    const channel = db
+      .channel("ventas-realtime")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "ventas" },
+        (payload) => {
+          const nueva = payload.new as Venta;
+          setVentas((prev) => [{ ...nueva, _tipo: "nueva" }, ...prev]);
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "ventas" },
+        (payload) => {
+          const actualizada = payload.new as Venta;
+          setVentas((prev) =>
+            prev.map((v) =>
+              v.id === actualizada.id ? { ...actualizada, _tipo: "actualizada" } : v
+            )
+          );
+        }
+      )
+      .subscribe((status) => {
+        setEstado(status);
+      });
 
-    return () => { supabase.removeChannel(channel); };
+    return () => { db.removeChannel(channel); };
   }, []);
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-6">Ventas en tiempo real</h1>
+      <div className="flex items-center gap-3 mb-6">
+        <h1 className="text-2xl font-bold">Ventas en tiempo real</h1>
+        <span className={`text-xs px-2 py-1 rounded-full font-mono ${
+          estado === "SUBSCRIBED"
+            ? "bg-green-800 text-green-300"
+            : "bg-yellow-800 text-yellow-300"
+        }`}>
+          {estado}
+        </span>
+      </div>
 
       {/* Formulario */}
       <div className="bg-slate-800 p-5 rounded-xl mb-8 flex flex-wrap gap-4 items-end">
@@ -126,7 +147,6 @@ export default function Ventas() {
         >
           {guardando ? "Guardando..." : "+ Guardar venta"}
         </button>
-
         {msg && (
           <p className={`text-sm w-full ${msg.tipo === "ok" ? "text-green-400" : "text-red-400"}`}>
             {msg.texto}
