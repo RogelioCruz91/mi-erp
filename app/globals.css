@@ -1,5 +1,5 @@
 @import "tailwindcss";
-@import "@excalidraw/excalidraw/dist/prod/index.css";
+@import "./excalidraw.css";
 
 :root {
   --background: #ffffff;
