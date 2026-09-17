@@ -57,10 +57,10 @@ export default function CollaborativeCanvas({ room }: { room: string }) {
         setUsers(list);
       })
       .on("presence", { event: "join" }, ({ newPresences }) => {
-        setUsers((prev) => [...prev, ...newPresences as UserInfo[]]);
+        setUsers((prev) => [...prev, ...(newPresences as unknown as UserInfo[])]);
       })
       .on("presence", { event: "leave" }, ({ leftPresences }) => {
-        const ids = (leftPresences as UserInfo[]).map((u) => u.id);
+        const ids = (leftPresences as unknown as UserInfo[]).map((u) => u.id);
         setUsers((prev) => prev.filter((u) => !ids.includes(u.id)));
       })
       .subscribe(async (s) => {
