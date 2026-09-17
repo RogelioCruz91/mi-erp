@@ -4,6 +4,8 @@ import { Excalidraw, MainMenu, WelcomeScreen } from "@excalidraw/excalidraw";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import { createClient } from "@supabase/supabase-js";
 
+// Load excalidraw CSS at runtime from CDN to avoid build-time package exports issues
+
 const supabase = createClient(
   "https://gamnenyakraafruvbkin.supabase.co",
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdhbW5lbnlha3JhYWZydXZia2luIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk5NzU4NDQsImV4cCI6MjA4NTU1MTg0NH0.UpolMRzWNfd4hqBeYvnTrrvDu1C1rmrNXKvnO82y_OQ"
@@ -30,8 +32,19 @@ export default function CollaborativeCanvas({ room }: { room: string }) {
   const [status,  setStatus]  = useState<"connecting" | "connected" | "error">("connecting");
 
   // Use ref for api so channel handlers don't need it as a dependency
-  const apiRef      = useRef<ExcalidrawImperativeAPI | null>(null);
+  const apiRef       = useRef<ExcalidrawImperativeAPI | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Inject excalidraw CSS from CDN once (avoids build-time package exports resolution)
+  useEffect(() => {
+    const id = "excalidraw-css";
+    if (document.getElementById(id)) return;
+    const link = document.createElement("link");
+    link.id = id;
+    link.rel = "stylesheet";
+    link.href = "https://cdn.jsdelivr.net/npm/@excalidraw/excalidraw@0.18.1/dist/prod/index.css";
+    document.head.appendChild(link);
+  }, []);
   const channelRef  = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const receiving   = useRef(false);
   const loaded      = useRef(false);
