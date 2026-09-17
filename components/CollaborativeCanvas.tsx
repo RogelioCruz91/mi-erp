@@ -3,7 +3,6 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import { Excalidraw, MainMenu, WelcomeScreen } from "@excalidraw/excalidraw";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import { createClient } from "@supabase/supabase-js";
-import "@excalidraw/excalidraw/dist/prod/index.css";
 
 const supabase = createClient(
   "https://gamnenyakraafruvbkin.supabase.co",
