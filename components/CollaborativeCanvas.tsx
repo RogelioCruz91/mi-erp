@@ -128,9 +128,9 @@ export default function CollaborativeCanvas({ room }: { room: string }) {
             <WelcomeScreen.Hints.ToolbarHint />
             <WelcomeScreen.Center>
               <WelcomeScreen.Center.Logo />
-              <WelcomeScreen.Center.Tagline>
+              <WelcomeScreen.Center.Heading>
                 Pizarra colaborativa — sala: {room}
-              </WelcomeScreen.Center.Tagline>
+              </WelcomeScreen.Center.Heading>
               <WelcomeScreen.Center.Menu>
                 <WelcomeScreen.Center.MenuItemHelp />
               </WelcomeScreen.Center.Menu>
