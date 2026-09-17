@@ -26,46 +26,32 @@ function mergeElements(current: El[], incoming: El[]): El[] {
 }
 
 export default function CollaborativeCanvas({ room }: { room: string }) {
-  const [api,     setApi]     = useState<ExcalidrawImperativeAPI | null>(null);
   const [users,   setUsers]   = useState<UserInfo[]>([]);
   const [cursors, setCursors] = useState<Record<string, CursorInfo>>({});
   const [status,  setStatus]  = useState<"connecting" | "connected" | "error">("connecting");
 
-  const channelRef  = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  // Use ref for api so channel handlers don't need it as a dependency
+  const apiRef      = useRef<ExcalidrawImperativeAPI | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const channelRef  = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const receiving   = useRef(false);
+  const loaded      = useRef(false);
   const lastCanvas  = useRef(0);
   const lastCursor  = useRef(0);
   const lastSave    = useRef(0);
 
-  /* ── Persistence: load from DB on mount ── */
-  useEffect(() => {
-    if (!api) return;
-    (async () => {
-      const { data } = await supabase
-        .from("pizarras")
-        .select("elements")
-        .eq("room", room)
-        .single();
-      if (data?.elements?.length) {
-        api.updateScene({ elements: data.elements });
-      }
-    })();
-  }, [api, room]);
-
-  /* ── Persistence: save to DB (throttled 3 s) ── */
+  /* ── Persistence: save (throttled 3 s) ── */
   const saveToDb = useCallback((elements: El[]) => {
     const now = Date.now();
     if (now - lastSave.current < 3000) return;
     lastSave.current = now;
-    const visible = elements.filter((e: El) => !e.isDeleted);
     supabase
       .from("pizarras")
-      .upsert({ room, elements: visible, updated_at: new Date().toISOString() })
-      .then(() => {});
+      .upsert({ room, elements: elements.filter((e: El) => !e.isDeleted), updated_at: new Date().toISOString() })
+      .then(({ error }) => { if (error) console.error("save error", error); });
   }, [room]);
 
-  /* ── Realtime broadcast: canvas ── */
+  /* ── Realtime broadcast helpers ── */
   const sendCanvas = useCallback((elements: El[]) => {
     const now = Date.now();
     if (now - lastCanvas.current < 150) return;
@@ -76,10 +62,9 @@ export default function CollaborativeCanvas({ room }: { room: string }) {
     });
   }, []);
 
-  /* ── Realtime broadcast: cursor (viewport fractions) ── */
   const sendCursor = useCallback((xFrac: number, yFrac: number) => {
     const now = Date.now();
-    if (now - lastCursor.current < 33) return; // ~30 fps
+    if (now - lastCursor.current < 40) return;
     lastCursor.current = now;
     channelRef.current?.send({
       type: "broadcast", event: "cursor",
@@ -87,11 +72,14 @@ export default function CollaborativeCanvas({ room }: { room: string }) {
     });
   }, []);
 
-  /* ── Supabase channel ── */
+  /* ── Supabase channel (created once per room, uses apiRef) ── */
   useEffect(() => {
+    loaded.current = false;
+
     const ch = supabase
       .channel(`pizarra:${room}`)
       .on("broadcast", { event: "canvas" }, ({ payload }) => {
+        const api = apiRef.current;
         if (payload.userId === MY_ID || !api) return;
         receiving.current = true;
         const merged = mergeElements([...api.getSceneElements()], payload.elements);
@@ -102,12 +90,7 @@ export default function CollaborativeCanvas({ room }: { room: string }) {
         if (payload.userId === MY_ID) return;
         setCursors((prev) => ({
           ...prev,
-          [payload.userId]: {
-            xFrac: payload.xFrac,
-            yFrac: payload.yFrac,
-            color: payload.color,
-            id: payload.userId,
-          },
+          [payload.userId]: { xFrac: payload.xFrac, yFrac: payload.yFrac, color: payload.color, id: payload.userId },
         }));
       })
       .on("presence", { event: "sync" }, () => {
@@ -117,11 +100,7 @@ export default function CollaborativeCanvas({ room }: { room: string }) {
       .on("presence", { event: "leave" }, ({ leftPresences }) => {
         const ids = (leftPresences as unknown as UserInfo[]).map((u) => u.id);
         setUsers((prev) => prev.filter((u) => !ids.includes(u.id)));
-        setCursors((prev) => {
-          const next = { ...prev };
-          ids.forEach((id) => delete next[id]);
-          return next;
-        });
+        setCursors((prev) => { const n = { ...prev }; ids.forEach((id) => delete n[id]); return n; });
       })
       .subscribe(async (s) => {
         if (s === "SUBSCRIBED") {
@@ -134,34 +113,56 @@ export default function CollaborativeCanvas({ room }: { room: string }) {
 
     channelRef.current = ch;
     return () => { supabase.removeChannel(ch); };
-  }, [room, api]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [room]); // room only — api accessed via ref
 
-  /* ── Mouse move → cursor broadcast (viewport fractions) ── */
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const handler = (e: MouseEvent) => {
-      const rect = el.getBoundingClientRect();
-      const xFrac = (e.clientX - rect.left)  / rect.width;
-      const yFrac = (e.clientY - rect.top)   / rect.height;
-      sendCursor(xFrac, yFrac);
-    };
-    el.addEventListener("mousemove", handler);
-    return () => el.removeEventListener("mousemove", handler);
-  }, [sendCursor]);
+  /* ── Load from DB when api is ready ── */
+  const handleApiReady = useCallback((api: ExcalidrawImperativeAPI) => {
+    apiRef.current = api;
+    if (loaded.current) return;
+    loaded.current = true;
+    supabase
+      .from("pizarras")
+      .select("elements")
+      .eq("room", room)
+      .single()
+      .then(({ data, error }) => {
+        if (error) { console.error("load error", error); return; }
+        if (data?.elements?.length) {
+          api.updateScene({ elements: data.elements });
+        }
+      });
+  }, [room]);
 
-  /* ── onChange: broadcast + persist ── */
+  /* ── onChange: broadcast + save ── */
   const handleChange = useCallback(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (elements: readonly any[]) => {
-      const arr = [...elements];
       if (!receiving.current) {
+        const arr = [...elements];
         sendCanvas(arr);
         saveToDb(arr);
       }
     },
     [sendCanvas, saveToDb]
   );
+
+  /* ── Cursor: listen on window to capture events even inside Excalidraw canvas ── */
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      const el = containerRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      // Only track when mouse is inside the canvas container
+      if (e.clientX < rect.left || e.clientX > rect.right ||
+          e.clientY < rect.top  || e.clientY > rect.bottom) return;
+      const xFrac = (e.clientX - rect.left) / rect.width;
+      const yFrac = (e.clientY - rect.top)  / rect.height;
+      sendCursor(xFrac, yFrac);
+    };
+    window.addEventListener("mousemove", handler);
+    return () => window.removeEventListener("mousemove", handler);
+  }, [sendCursor]);
 
   return (
     <div className="flex flex-col h-full">
@@ -198,7 +199,7 @@ export default function CollaborativeCanvas({ room }: { room: string }) {
       {/* Canvas + cursor overlays */}
       <div ref={containerRef} className="flex-1 relative overflow-hidden">
         <Excalidraw
-          excalidrawAPI={(a) => setApi(a)}
+          excalidrawAPI={handleApiReady}
           onChange={handleChange}
           initialData={{ appState: { viewBackgroundColor: "#0f172a", theme: "dark" } }}
           langCode="es-ES"
@@ -224,27 +225,18 @@ export default function CollaborativeCanvas({ room }: { room: string }) {
           </WelcomeScreen>
         </Excalidraw>
 
-        {/* Remote cursors — positioned as % of container */}
+        {/* Remote cursors */}
         {Object.values(cursors).map((cursor) => (
           <div
             key={cursor.id}
             className="absolute pointer-events-none z-50"
-            style={{
-              left: `${cursor.xFrac * 100}%`,
-              top:  `${cursor.yFrac * 100}%`,
-              transform: "translate(0, 0)",
-            }}
+            style={{ left: `${cursor.xFrac * 100}%`, top: `${cursor.yFrac * 100}%` }}
           >
-            <svg
-              width="18" height="18"
-              viewBox="0 0 18 18"
-              style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.7))" }}
-            >
+            <svg width="18" height="18" viewBox="0 0 18 18"
+              style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.7))" }}>
               <path
                 d="M0 0 L0 14 L3.5 10.5 L6.5 17 L8.5 16 L5.5 9.5 L11 9.5 Z"
-                fill={cursor.color}
-                stroke="white"
-                strokeWidth="1"
+                fill={cursor.color} stroke="white" strokeWidth="1"
               />
             </svg>
             <span
