@@ -4,8 +4,6 @@ import { Excalidraw, MainMenu, WelcomeScreen } from "@excalidraw/excalidraw";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import { createClient } from "@supabase/supabase-js";
 
-// Load excalidraw CSS at runtime from CDN to avoid build-time package exports issues
-
 const supabase = createClient(
   "https://gamnenyakraafruvbkin.supabase.co",
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdhbW5lbnlha3JhYWZydXZia2luIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk5NzU4NDQsImV4cCI6MjA4NTU1MTg0NH0.UpolMRzWNfd4hqBeYvnTrrvDu1C1rmrNXKvnO82y_OQ"
@@ -16,7 +14,8 @@ const COLORS   = ["#f97316","#22c55e","#3b82f6","#a855f7","#ec4899","#eab308","#
 const MY_COLOR = COLORS[Math.floor(Math.random() * COLORS.length)];
 
 type UserInfo   = { id: string; color: string };
-type CursorInfo = { xFrac: number; yFrac: number; color: string; id: string };
+// Cursors stored in SCENE coordinates (same for all users)
+type CursorInfo = { sceneX: number; sceneY: number; color: string; id: string };
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type El = any;
 
@@ -26,16 +25,32 @@ function mergeElements(current: El[], incoming: El[]): El[] {
   return Array.from(map.values());
 }
 
+// Excalidraw formula: viewport = (scene + scroll) * zoom
+function sceneToViewport(
+  sceneX: number, sceneY: number,
+  scrollX: number, scrollY: number, zoom: number
+) {
+  return { x: (sceneX + scrollX) * zoom, y: (sceneY + scrollY) * zoom };
+}
+
 export default function CollaborativeCanvas({ room }: { room: string }) {
   const [users,   setUsers]   = useState<UserInfo[]>([]);
   const [cursors, setCursors] = useState<Record<string, CursorInfo>>({});
   const [status,  setStatus]  = useState<"connecting" | "connected" | "error">("connecting");
+  // Store scroll/zoom in state so cursor overlays re-render on pan/zoom
+  const [vp, setVp] = useState({ scrollX: 0, scrollY: 0, zoom: 1 });
 
-  // Use ref for api so channel handlers don't need it as a dependency
-  const apiRef       = useRef<ExcalidrawImperativeAPI | null>(null);
+  const apiRef      = useRef<ExcalidrawImperativeAPI | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const channelRef  = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const receiving   = useRef(false);
+  const loaded      = useRef(false);
+  const lastCanvas  = useRef(0);
+  const lastCursor  = useRef(0);
+  const lastSave    = useRef(0);
+  const lastVp      = useRef(0);
 
-  // Inject excalidraw CSS from CDN once (avoids build-time package exports resolution)
+  // Load excalidraw CSS from CDN once
   useEffect(() => {
     const id = "excalidraw-css";
     if (document.getElementById(id)) return;
@@ -45,12 +60,6 @@ export default function CollaborativeCanvas({ room }: { room: string }) {
     link.href = "https://cdn.jsdelivr.net/npm/@excalidraw/excalidraw@0.18.1/dist/prod/index.css";
     document.head.appendChild(link);
   }, []);
-  const channelRef  = useRef<ReturnType<typeof supabase.channel> | null>(null);
-  const receiving   = useRef(false);
-  const loaded      = useRef(false);
-  const lastCanvas  = useRef(0);
-  const lastCursor  = useRef(0);
-  const lastSave    = useRef(0);
 
   /* ── Persistence: save (throttled 3 s) ── */
   const saveToDb = useCallback((elements: El[]) => {
@@ -63,7 +72,7 @@ export default function CollaborativeCanvas({ room }: { room: string }) {
       .then(({ error }) => { if (error) console.error("save error", error); });
   }, [room]);
 
-  /* ── Realtime broadcast helpers ── */
+  /* ── Broadcast: canvas ── */
   const sendCanvas = useCallback((elements: El[]) => {
     const now = Date.now();
     if (now - lastCanvas.current < 150) return;
@@ -74,17 +83,18 @@ export default function CollaborativeCanvas({ room }: { room: string }) {
     });
   }, []);
 
-  const sendCursor = useCallback((xFrac: number, yFrac: number) => {
+  /* ── Broadcast: cursor in SCENE coords ── */
+  const sendCursor = useCallback((sceneX: number, sceneY: number) => {
     const now = Date.now();
     if (now - lastCursor.current < 40) return;
     lastCursor.current = now;
     channelRef.current?.send({
       type: "broadcast", event: "cursor",
-      payload: { userId: MY_ID, color: MY_COLOR, xFrac, yFrac },
+      payload: { userId: MY_ID, color: MY_COLOR, sceneX, sceneY },
     });
   }, []);
 
-  /* ── Supabase channel (created once per room, uses apiRef) ── */
+  /* ── Supabase channel (recreated only on room change) ── */
   useEffect(() => {
     loaded.current = false;
 
@@ -94,15 +104,19 @@ export default function CollaborativeCanvas({ room }: { room: string }) {
         const api = apiRef.current;
         if (payload.userId === MY_ID || !api) return;
         receiving.current = true;
-        const merged = mergeElements([...api.getSceneElements()], payload.elements);
-        api.updateScene({ elements: merged });
+        api.updateScene({ elements: mergeElements([...api.getSceneElements()], payload.elements) });
         setTimeout(() => { receiving.current = false; }, 60);
       })
       .on("broadcast", { event: "cursor" }, ({ payload }) => {
         if (payload.userId === MY_ID) return;
         setCursors((prev) => ({
           ...prev,
-          [payload.userId]: { xFrac: payload.xFrac, yFrac: payload.yFrac, color: payload.color, id: payload.userId },
+          [payload.userId]: {
+            sceneX: payload.sceneX,
+            sceneY: payload.sceneY,
+            color: payload.color,
+            id: payload.userId,
+          },
         }));
       })
       .on("presence", { event: "sync" }, () => {
@@ -126,9 +140,9 @@ export default function CollaborativeCanvas({ room }: { room: string }) {
     channelRef.current = ch;
     return () => { supabase.removeChannel(ch); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [room]); // room only — api accessed via ref
+  }, [room]);
 
-  /* ── Load from DB when api is ready ── */
+  /* ── Load DB on api ready ── */
   const handleApiReady = useCallback((api: ExcalidrawImperativeAPI) => {
     apiRef.current = api;
     if (loaded.current) return;
@@ -138,18 +152,21 @@ export default function CollaborativeCanvas({ room }: { room: string }) {
       .select("elements")
       .eq("room", room)
       .single()
-      .then(({ data, error }) => {
-        if (error) { console.error("load error", error); return; }
-        if (data?.elements?.length) {
-          api.updateScene({ elements: data.elements });
-        }
+      .then(({ data }) => {
+        if (data?.elements?.length) api.updateScene({ elements: data.elements });
       });
   }, [room]);
 
-  /* ── onChange: broadcast + save ── */
+  /* ── onChange: elements + appState ── */
   const handleChange = useCallback(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (elements: readonly any[]) => {
+    (elements: readonly any[], appState: { scrollX: number; scrollY: number; zoom: { value: number } }) => {
+      // Update viewport state for cursor re-rendering (throttled to ~30fps)
+      const now = Date.now();
+      if (now - lastVp.current > 33) {
+        lastVp.current = now;
+        setVp({ scrollX: appState.scrollX, scrollY: appState.scrollY, zoom: appState.zoom.value });
+      }
       if (!receiving.current) {
         const arr = [...elements];
         sendCanvas(arr);
@@ -159,22 +176,13 @@ export default function CollaborativeCanvas({ room }: { room: string }) {
     [sendCanvas, saveToDb]
   );
 
-  /* ── Cursor: listen on window to capture events even inside Excalidraw canvas ── */
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      const el = containerRef.current;
-      if (!el) return;
-      const rect = el.getBoundingClientRect();
-      // Only track when mouse is inside the canvas container
-      if (e.clientX < rect.left || e.clientX > rect.right ||
-          e.clientY < rect.top  || e.clientY > rect.bottom) return;
-      const xFrac = (e.clientX - rect.left) / rect.width;
-      const yFrac = (e.clientY - rect.top)  / rect.height;
-      sendCursor(xFrac, yFrac);
-    };
-    window.addEventListener("mousemove", handler);
-    return () => window.removeEventListener("mousemove", handler);
-  }, [sendCursor]);
+  /* ── onPointerUpdate: scene coords from Excalidraw ── */
+  const handlePointerUpdate = useCallback(
+    (payload: { pointer: { x: number; y: number } }) => {
+      sendCursor(payload.pointer.x, payload.pointer.y);
+    },
+    [sendCursor]
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -213,6 +221,7 @@ export default function CollaborativeCanvas({ room }: { room: string }) {
         <Excalidraw
           excalidrawAPI={handleApiReady}
           onChange={handleChange}
+          onPointerUpdate={handlePointerUpdate}
           initialData={{ appState: { viewBackgroundColor: "#0f172a", theme: "dark" } }}
           langCode="es-ES"
         >
@@ -237,28 +246,31 @@ export default function CollaborativeCanvas({ room }: { room: string }) {
           </WelcomeScreen>
         </Excalidraw>
 
-        {/* Remote cursors */}
-        {Object.values(cursors).map((cursor) => (
-          <div
-            key={cursor.id}
-            className="absolute pointer-events-none z-50"
-            style={{ left: `${cursor.xFrac * 100}%`, top: `${cursor.yFrac * 100}%` }}
-          >
-            <svg width="18" height="18" viewBox="0 0 18 18"
-              style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.7))" }}>
-              <path
-                d="M0 0 L0 14 L3.5 10.5 L6.5 17 L8.5 16 L5.5 9.5 L11 9.5 Z"
-                fill={cursor.color} stroke="white" strokeWidth="1"
-              />
-            </svg>
-            <span
-              className="text-white font-bold px-1.5 py-0.5 rounded-md whitespace-nowrap ml-1 inline-block"
-              style={{ backgroundColor: cursor.color, fontSize: "10px" }}
+        {/* Remote cursors — converted from scene coords using own scroll/zoom */}
+        {Object.values(cursors).map((cursor) => {
+          const pos = sceneToViewport(cursor.sceneX, cursor.sceneY, vp.scrollX, vp.scrollY, vp.zoom);
+          return (
+            <div
+              key={cursor.id}
+              className="absolute pointer-events-none z-50"
+              style={{ left: pos.x, top: pos.y }}
             >
-              {cursor.id}
-            </span>
-          </div>
-        ))}
+              <svg width="18" height="18" viewBox="0 0 18 18"
+                style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.7))" }}>
+                <path
+                  d="M0 0 L0 14 L3.5 10.5 L6.5 17 L8.5 16 L5.5 9.5 L11 9.5 Z"
+                  fill={cursor.color} stroke="white" strokeWidth="1"
+                />
+              </svg>
+              <span
+                className="text-white font-bold px-1.5 py-0.5 rounded-md whitespace-nowrap ml-1 inline-block"
+                style={{ backgroundColor: cursor.color, fontSize: "10px" }}
+              >
+                {cursor.id}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
