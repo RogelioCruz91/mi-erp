@@ -3,7 +3,7 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import { Excalidraw, MainMenu, WelcomeScreen } from "@excalidraw/excalidraw";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import { createClient } from "@supabase/supabase-js";
-import "@excalidraw/excalidraw/index.css";
+import "@excalidraw/excalidraw/dist/prod/index.css";
 
 const supabase = createClient(
   "https://gamnenyakraafruvbkin.supabase.co",
@@ -114,13 +114,14 @@ export default function CollaborativeCanvas({ room }: { room: string }) {
 
   /* ---------- Excalidraw callbacks ---------- */
   const handleChange = useCallback(
-    (elements: El[], appState: { scrollX: number; scrollY: number; zoom: { value: number } }) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (elements: readonly any[], appState: { scrollX: number; scrollY: number; zoom: { value: number } }) => {
       appStateRef.current = {
         scrollX: appState.scrollX,
         scrollY: appState.scrollY,
         zoom: appState.zoom.value,
       };
-      if (!receiving.current) sendCanvas(elements);
+      if (!receiving.current) sendCanvas([...elements]);
     },
     [sendCanvas]
   );
